@@ -1,7 +1,3 @@
-# MPU6500
-## MPU6500 library with DMP support
-
-```cpp
 #include "mpu6500.h"
 #include "i2c.h"
 #include <exception>
@@ -51,59 +47,3 @@ int main(int argc, char *argv[])
 
     return res;
 }
-```
-
-## Output:
-```
-Accelerometer calibration succeeded
-## Accelerometer raw data
-Accelerometer: ax=0.01 g, ay=-2.00 g, az=0.03 g
-Gyroscope: gx=-0.36 °/s, gy=0.31 °/s, gz=0.27 °/s
-Temperature: 29.77 °C
-
-Accelerometer: ax=0.01 g, ay=-2.00 g, az=0.03 g
-Gyroscope: gx=-0.34 °/s, gy=0.35 °/s, gz=0.33 °/s
-Temperature: 29.79 °C
-
-Accelerometer: ax=0.01 g, ay=-2.00 g, az=0.03 g
-Gyroscope: gx=-0.34 °/s, gy=0.35 °/s, gz=0.33 °/s
-Temperature: 29.79 °C
-
-## Accelerometer DMP processed data
-Roll: 0.64°, Pitch: 3.00°, Yaw: -0.31°
-Roll: 0.70°, Pitch: 3.11°, Yaw: -0.30°
-Roll: 0.64°, Pitch: 2.52°, Yaw: -0.30°
-Roll: 0.64°, Pitch: 3.02°, Yaw: -0.32°
-Roll: 0.97°, Pitch: 3.53°, Yaw: -0.29°
-Roll: 0.78°, Pitch: 3.02°, Yaw: -0.27°
-Roll: 0.69°, Pitch: 2.72°, Yaw: -0.35°
-Roll: 0.81°, Pitch: 2.49°, Yaw: -0.34°
-Roll: 0.86°, Pitch: 2.80°, Yaw: -0.29°
-Roll: 1.00°, Pitch: 2.58°, Yaw: -0.31°
-```
-
-Note: This project depends on my personal library collection providing interface classes for I2c bus and I2c device.
-This library doesn't not use any platform specific code and compatible with little and big-endian hardware.
-
-### How to use
-```
-1. Clone this repo
-$ https://github.com/Virviglaz/MPU6500_DMP.git
-
-2. Clone 'mylibraries'
-$ https://github.com/Virviglaz/mylibraries.git
-
-3. Download submodules
-$ git submodule update --init
-
-4. Open Makefile and check your build target architecture
-CROSS_COMPILE	:= aarch64-linux-gnu-
-This example uses Orange Pi3 ARM64 Linux
-
-5. Install related toolchain
-for ARM64 (aarch64-linux-gnu-g++):
-$ sudo apt install g++-aarch64-linux-gnu -y
-
-6. Build and run
-$ make run
-```
