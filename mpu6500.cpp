@@ -46,6 +46,7 @@
 #include "bitops.h"
 #include <errno.h>
 #include <cmath>
+#include <array>
 
 #define MPU6500_XA_OFFS_H       0x77
 #define MPU6500_XG_OFFS_H       0x13
@@ -174,7 +175,7 @@ int MPU6500_Base::Init()
         return -ENODEV;
 
     /* Minimal configuration */
-    ifs_.WriteReg(MPU6500_PWR_MGMT_1, 0);
+    ifs_.WriteReg(MPU6500_PWR_MGMT_1, 1);
     return 0;
 }
 
@@ -268,16 +269,16 @@ uint16_t MPU6500_Base::GetFIFOCount()
 MPU6500_Base::cal_offsets MPU6500_Base::ReadCalibrationOffsets()
 {
     cal_offsets offsets;
-    uint8_t buf[6];
+    uint8_t buf[8];
 
     // 1. Safe packet read from I2C into a local byte array (No Strict Aliasing violation)
-    ifs_.Read(MPU6500_XA_OFFS_H, buf, 6);
+    ifs_.Read(MPU6500_XA_OFFS_H, buf, 8);
     
     // 2. Reassemble sign-correct values from Big-Endian array
     // We do sign extension by casting the high byte to int8_t before shifting
     offsets.acc_x_offset = ((static_cast<int16_t>(static_cast<int8_t>(buf[0])) << 8) | buf[1]) >> 1;
-    offsets.acc_y_offset = ((static_cast<int16_t>(static_cast<int8_t>(buf[2])) << 8) | buf[3]) >> 1;
-    offsets.acc_z_offset = ((static_cast<int16_t>(static_cast<int8_t>(buf[4])) << 8) | buf[5]) >> 1;
+    offsets.acc_y_offset = ((static_cast<int16_t>(static_cast<int8_t>(buf[3])) << 8) | buf[4]) >> 1;
+    offsets.acc_z_offset = ((static_cast<int16_t>(static_cast<int8_t>(buf[6])) << 8) | buf[7]) >> 1;
 
     // 3. Safe packet read for Gyroscope
     ifs_.Read(MPU6500_XG_OFFS_H, buf, 6);
@@ -290,7 +291,7 @@ MPU6500_Base::cal_offsets MPU6500_Base::ReadCalibrationOffsets()
 
 void MPU6500_Base::WriteCalibrationOffsets(const cal_offsets& offsets)
 {
-    uint8_t buf[6];
+    uint8_t buf[8];
 
     // 1. Pack Accelerometer offsets safely (Using const input, no user data corruption)
     // Shift left by 1 and force the temperature compensation bit to 1
@@ -298,15 +299,23 @@ void MPU6500_Base::WriteCalibrationOffsets(const cal_offsets& offsets)
     int16_t y = (offsets.acc_y_offset << 1) | 1;
     int16_t z = (offsets.acc_z_offset << 1) | 1;
 
-    buf[0] = static_cast<uint8_t>((x >> 8) & 0xFF);  buf[1] = static_cast<uint8_t>(x & 0xFF);
-    buf[2] = static_cast<uint8_t>((y >> 8) & 0xFF);  buf[3] = static_cast<uint8_t>(y & 0xFF);
-    buf[4] = static_cast<uint8_t>((z >> 8) & 0xFF);  buf[5] = static_cast<uint8_t>(z & 0xFF);
-    ifs_.Write(MPU6500_XA_OFFS_H, buf, 6);
+    buf[0] = static_cast<uint8_t>((x >> 8) & 0xFF); // Register 119
+    buf[1] = static_cast<uint8_t>(x & 0xFF);        // Register 120
+    buf[2] = 0;                                     // Register 121 (reserved, set to 0)
+    buf[3] = static_cast<uint8_t>((y >> 8) & 0xFF); // Register 122
+    buf[4] = static_cast<uint8_t>(y & 0xFF);        // Register 123
+    buf[5] = 0;                                     // Register 124 (reserved, set to 0)
+    buf[6] = static_cast<uint8_t>((z >> 8) & 0xFF); // Register 125
+    buf[7] = static_cast<uint8_t>(z & 0xFF);        // Register 126
+    ifs_.Write(MPU6500_XA_OFFS_H, buf, 8);
 
     // 2. Pack Gyroscope offsets safely
-    buf[0] = static_cast<uint8_t>((offsets.gyro_x_offset >> 8) & 0xFF); buf[1] = static_cast<uint8_t>(offsets.gyro_x_offset & 0xFF);
-    buf[2] = static_cast<uint8_t>((offsets.gyro_y_offset >> 8) & 0xFF); buf[3] = static_cast<uint8_t>(offsets.gyro_y_offset & 0xFF);
-    buf[4] = static_cast<uint8_t>((offsets.gyro_z_offset >> 8) & 0xFF); buf[5] = static_cast<uint8_t>(offsets.gyro_z_offset & 0xFF);
+    buf[0] = static_cast<uint8_t>((offsets.gyro_x_offset >> 8) & 0xFF);
+    buf[1] = static_cast<uint8_t>(offsets.gyro_x_offset & 0xFF);
+    buf[2] = static_cast<uint8_t>((offsets.gyro_y_offset >> 8) & 0xFF);
+    buf[3] = static_cast<uint8_t>(offsets.gyro_y_offset & 0xFF);
+    buf[4] = static_cast<uint8_t>((offsets.gyro_z_offset >> 8) & 0xFF);
+    buf[5] = static_cast<uint8_t>(offsets.gyro_z_offset & 0xFF);
     ifs_.Write(MPU6500_XG_OFFS_H, buf, 6);
 }
 
@@ -339,11 +348,11 @@ int MPU6500_Base::Calibrate(int max_iterations, int16_t target_error)
 
         /* Calculate the maximum error between the current readings and the target values */
         auto get_error = [&data]() {
-            int16_t *ptr = reinterpret_cast<int16_t*>(&data);
+            std::array<int16_t, 6> values = { data.x, data.y, data.z, data.ax, data.ay, data.az };
             int16_t max_error = 0;
-            for (size_t k = 0; k < 7; k++) {
-                int16_t error = std::abs(*ptr++);
-                if (k != 3 && error > max_error)
+            for (size_t k = 0; k < values.size(); k++) {
+                int16_t error = std::abs(values[k]);
+                if (error > max_error)
                     max_error = error;
             }
             return max_error;
