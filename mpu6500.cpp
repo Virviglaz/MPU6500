@@ -471,8 +471,8 @@ int MPU6500_DMP::Init()
         bytes_written += current_chunk;
     }
 
-    // Set start address for DMP firmware (0x0300)
-    ifs_.WriteReg_s16(PRGM_START_H, 0x0300);
+    // Set start address for DMP firmware (0x0400)
+    ifs_.WriteReg_s16(PRGM_START_H, 0x0400);
 
     // Turn off FIFO to prevent DMP from writing data before we finish configuring it
     ifs_.WriteReg(MPU6500_FIFO_ENABLE, 0x00);
