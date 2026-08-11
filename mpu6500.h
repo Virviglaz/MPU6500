@@ -200,7 +200,7 @@ public:
 
     virtual RawData& ReadData() override;
 
-    int Calibrate(int max_iterations = 100, int16_t target_error = 50) override;
+    int Calibrate(int max_iterations = 100, int16_t target_error = 100) override;
 
     CalibrationData ReadCalibrationOffsets() override;
 

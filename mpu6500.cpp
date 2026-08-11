@@ -46,6 +46,7 @@
 #include "bitops.h"
 #include <errno.h>
 #include <cmath>
+#include <array>
 
 #define MPU6500_XA_OFFS_H       0x77
 #define MPU6500_XG_OFFS_H       0x13
@@ -188,7 +189,7 @@ int MPU6500_Base::Init()
 
 int MPU6500_Base::Reset()
 {
-    ifs_.WriteReg(MPU6500_PWR_MGMT_1, 0x80);
+    ifs_.WriteReg(MPU6500_PWR_MGMT_1, BIT(7));
 
     volatile uint32_t reset_timeout = IFS_BUS_TIMEOUT_CYCLES;
 
@@ -205,7 +206,6 @@ int MPU6500_Base::Reset()
     return 0;
 }
 
-
 bool MPU6500_Base::IsDataReady()
 {
     return ifs_.ReadReg(MPU6500_INT_STATUS) & BIT(0);
@@ -213,7 +213,7 @@ bool MPU6500_Base::IsDataReady()
 
 void MPU6500_Base::SetAccGain(AccelGain gain)
 {
-     uint8_t reg_val = static_cast<uint8_t>(gain) << 3;
+    uint8_t reg_val = static_cast<uint8_t>(gain) << 3;
     ifs_.WriteReg(MPU6500_ACCEL_CONFIG, reg_val);
     _acc_gain = gain;
 }
@@ -295,16 +295,16 @@ uint16_t MPU6500_Base::GetFIFOCount()
 MPU6500_Base::CalibrationData MPU6500_Base::ReadCalibrationOffsets()
 {
     CalibrationData offsets;
-    uint8_t buf[6];
+    uint8_t buf[8];
 
     // 1. Safe packet read from I2C into a local byte array (No Strict Aliasing violation)
-    ifs_.Read(MPU6500_XA_OFFS_H, buf, 6);
+    ifs_.Read(MPU6500_XA_OFFS_H, buf, sizeof(buf));
     
     // 2. Reassemble sign-correct values from Big-Endian array
     // We do sign extension by casting the high byte to int8_t before shifting
     offsets.ax = ((static_cast<int16_t>(static_cast<int8_t>(buf[0])) << 8) | buf[1]) >> 1;
-    offsets.ay = ((static_cast<int16_t>(static_cast<int8_t>(buf[2])) << 8) | buf[3]) >> 1;
-    offsets.az = ((static_cast<int16_t>(static_cast<int8_t>(buf[4])) << 8) | buf[5]) >> 1;
+    offsets.ay = ((static_cast<int16_t>(static_cast<int8_t>(buf[3])) << 8) | buf[4]) >> 1;
+    offsets.az = ((static_cast<int16_t>(static_cast<int8_t>(buf[6])) << 8) | buf[7]) >> 1;
 
     // 3. Safe packet read for Gyroscope
     ifs_.Read(MPU6500_XG_OFFS_H, buf, 6);
@@ -317,13 +317,13 @@ MPU6500_Base::CalibrationData MPU6500_Base::ReadCalibrationOffsets()
 
 void MPU6500_Base::WriteCalibrationOffsets(CalibrationData offsets)
 {
-    uint8_t buf[6];
+    uint8_t buf[8];
     // 1. Read the temperature compensation bits from the accelerometer offset registers
-    ifs_.Read(MPU6500_XA_OFFS_H, buf, 6);
+    ifs_.Read(MPU6500_XA_OFFS_H, buf, sizeof(buf));
     int16_t temp_comp_bit[3] = {
-        static_cast<int16_t>(buf[0] & 0x01),
-        static_cast<int16_t>(buf[2] & 0x01),
-        static_cast<int16_t>(buf[4] & 0x01)
+        static_cast<int16_t>(buf[1] & 0x01), // Register XA_OFFS_LSB 0x78 120
+        static_cast<int16_t>(buf[4] & 0x01), // Register YA_OFFS_LSB 0x7A 123
+        static_cast<int16_t>(buf[7] & 0x01)  // Register ZA_OFFS_LSB 0x7C 126
     };
 
     // 2. Pack Accelerometer offsets safely (Using const input, no user data corruption)
@@ -334,18 +334,16 @@ void MPU6500_Base::WriteCalibrationOffsets(CalibrationData offsets)
 
     // 3. Write the packed accelerometer offsets back to the device
     buf[0] = static_cast<uint8_t>((x >> 8) & 0xFF);  buf[1] = static_cast<uint8_t>(x & 0xFF);
-    buf[2] = static_cast<uint8_t>((y >> 8) & 0xFF);  buf[3] = static_cast<uint8_t>(y & 0xFF);
-    buf[4] = static_cast<uint8_t>((z >> 8) & 0xFF);  buf[5] = static_cast<uint8_t>(z & 0xFF);
-    ifs_.Write(MPU6500_XA_OFFS_H, buf, 6);
+    buf[3] = static_cast<uint8_t>((y >> 8) & 0xFF);  buf[4] = static_cast<uint8_t>(y & 0xFF);
+    buf[6] = static_cast<uint8_t>((z >> 8) & 0xFF);  buf[7] = static_cast<uint8_t>(z & 0xFF);
+    buf[2] = buf[5] = buf[7] = 0; // Clear the unused bytes (LSB registers) to avoid accidental writes
+    ifs_.Write(MPU6500_XA_OFFS_H, buf, sizeof(buf));
 
     // 4. Pack Gyroscope offsets safely
     buf[0] = static_cast<uint8_t>((offsets.gx >> 8) & 0xFF); buf[1] = static_cast<uint8_t>(offsets.gx & 0xFF);
     buf[2] = static_cast<uint8_t>((offsets.gy >> 8) & 0xFF); buf[3] = static_cast<uint8_t>(offsets.gy & 0xFF);
     buf[4] = static_cast<uint8_t>((offsets.gz >> 8) & 0xFF); buf[5] = static_cast<uint8_t>(offsets.gz & 0xFF);
     ifs_.Write(MPU6500_XG_OFFS_H, buf, 6);
-
-    // 5. Reset hardware FIFO and DMP pipeline to instantly apply new parameters
-    ifs_.SetBit(MPU6500_USER_CTRL, 0x0C);
 }
 
 #ifdef DEBUG
@@ -353,13 +351,12 @@ void MPU6500_Base::WriteCalibrationOffsets(CalibrationData offsets)
 #endif
 int MPU6500_Base::Calibrate(int max_iterations, int16_t target_error)
 {
-    WriteCalibrationOffsets(CalibrationData()); // Clear existing offsets to start calibration from a known state
     int res = -EFAULT;
 
-    CalibrationData offsets;
+    CalibrationData offsets = ReadCalibrationOffsets(); // Start with existing offsets
 
 	/* Dynamically calculate 1g baseline LSB based on the active accelerometer scale */
-	int16_t gravity_1g = static_cast<int16_t>(16384 >> static_cast<uint8_t>(_acc_gain));
+	int16_t gravity_1g = static_cast<int16_t>(16384U >> static_cast<uint8_t>(_acc_gain));
 
     for (int i = 0; i != max_iterations; i++) {
         RawData data = ReadData();
@@ -379,12 +376,13 @@ int MPU6500_Base::Calibrate(int max_iterations, int16_t target_error)
         WriteCalibrationOffsets(offsets); // Apply new offsets to the sensor
 
         /* Calculate the maximum error between the current readings and the target values */
-        auto get_error = [&data]() {
-            int16_t *ptr = reinterpret_cast<int16_t*>(&data);
+        auto get_error = [&data, gravity_1g]() {
+        	std::array<int16_t, 6> results = { data.Accel.GetRawX(), data.Accel.GetRawY(),
+                data.Accel.GetRawZ(), data.Gyro.GetRawX(), data.Gyro.GetRawY(), data.Gyro.GetRawZ() };
             int16_t max_error = 0;
-            for (size_t k = 0; k < 7; k++) {
-                int16_t error = std::abs(*ptr++);
-                if (k != 3 && error > max_error)
+            for (size_t k = 0; k < 6; k++) {
+                int16_t error = std::abs(k == 2 ? results[k] - gravity_1g : results[k]);
+                if (error > max_error)
                     max_error = error;
             }
             return max_error;
@@ -393,11 +391,14 @@ int MPU6500_Base::Calibrate(int max_iterations, int16_t target_error)
         /* Measure the maximum error and break if within target */
         int16_t error = get_error();
 #ifdef DEBUG
+        //printf("Iter %3d: z=%6d, offset_z=%6d, error=%6d\n", i + 1, data.Accel.GetRawZ(), offsets.az, error);
+#if 1
         printf("Iter %3d: x=%6d y=%6d z=%6d gx=%6d gy=%6d gz=%6d Err=%d\n",
                i + 1,
-               data.Accel.GetRawX(), data.Accel.GetRawY(), data.Accel.GetRawZ(),
+               data.Accel.GetRawX(), data.Accel.GetRawY(), data.Accel.GetRawZ() - gravity_1g,
                data.Gyro.GetRawX(), data.Gyro.GetRawY(), data.Gyro.GetRawZ(),
                error);
+#endif
 #endif
         if (error < target_error) {
             res = 0;
@@ -422,9 +423,6 @@ int MPU6500_DMP::Init()
 {
     int res = MPU6500_Base::Init();
     if (res != 0) return res;
-
-    ifs_.WriteReg(MPU6500_SMPLRT_DIV, 0x04);
-    ifs_.WriteReg(MPU6500_ACCEL_CFG2, 0x40); 
 
     /* Load DMP firmware */
     const uint8_t dmp_img[] = {
@@ -471,11 +469,16 @@ int MPU6500_DMP::Init()
         bytes_written += current_chunk;
     }
 
-    // Set start address for DMP firmware (0x0400)
-    ifs_.WriteReg_s16(PRGM_START_H, 0x0400);
+    const uint8_t dmp_addr[2] = { 0x04, 0x00 }; // DMP program start address in the MPU6050 memory
+    ifs_.Write(PRGM_START_H, dmp_addr, sizeof(dmp_addr));
+
+    ifs_.WriteReg(MPU6500_USER_CTRL, BIT(7) | BIT(3) | BIT(2));
+    while (ifs_.ReadReg(MPU6500_USER_CTRL) & (BIT(3) | BIT(2))) { } // Wait for DMP and FIFO reset to complete
 
     // Turn off FIFO to prevent DMP from writing data before we finish configuring it
     ifs_.WriteReg(MPU6500_FIFO_ENABLE, 0x00);
+
+    ifs_.WriteReg(MPU6500_INT_ENABLE, 0x01);
 
     /* Configure DMP features (28 bytes DMP packet) */
     ifs_.WriteReg(MPU6500_BANK_SEL, 0x03);
@@ -483,20 +486,10 @@ int MPU6500_DMP::Init()
     uint8_t dmp_features_mask[2] = { 0x0B, 0x00 }; // QUAT + ACCEL + GYRO
     ifs_.Write(MPU6500_MEM_R_W, dmp_features_mask, 2);
 
-    ifs_.WriteReg(MPU6500_BANK_SEL, 0x03);
-    ifs_.WriteReg(MPU6500_MEM_START_ADDR, 0xB2);
-    uint8_t clear_mask[2] = { 0x00, 0x00 };
-    ifs_.Write(MPU6500_MEM_R_W, clear_mask, 2);
-
-    /* Clear and reset pipelines (Pulse reset) */
-    // Write bits to reset DMP_RST (0x08) and FIFO_RST (0x04)
-    ifs_.WriteReg(MPU6500_USER_CTRL, 0x0C); 
-    while (ifs_.ReadReg(MPU6500_USER_CTRL) & 0x0C) { }
-
     /* Final DMP start */
     // Enable DMP_EN (0x80) and FIFO_EN (0x40). 
     // Now DMP will start packing the configured 28-byte packets.
-    ifs_.WriteReg(MPU6500_USER_CTRL, 0xC0); 
+    ifs_.WriteReg(MPU6500_USER_CTRL, BIT(7));
 
     return 0;
 }
